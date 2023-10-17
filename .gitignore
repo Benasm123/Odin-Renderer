@@ -1,0 +1,4 @@
+/.vscode/
+glslc.exe
+*.exe
+*.pdb
