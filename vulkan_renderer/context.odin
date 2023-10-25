@@ -105,7 +105,10 @@ Context :: struct {
 	push_constant: PushConstant,
 
 	meshes: [dynamic]^Mesh,
-	line_meshes: [dynamic]^Mesh
+	line_meshes: [dynamic]^Mesh,
+
+	camera_pos: Vec3,
+	camera_direction: Vec3,
 }
 
 get_memory_from_properties :: proc(using ctx: ^Context, properties: vk.MemoryPropertyFlags) -> (u32) {
@@ -175,8 +178,11 @@ init_renderer :: proc(using ctx: ^Context) -> (ErrorCode) {
 	viewport.minDepth = 0.0
 	viewport.maxDepth = 1.0
 
+	camera_direction = {0, 0, -1}
+	camera_pos = {0, 0, -10}
+
 	if create_pipeline_layout(ctx) != .SUCCESS do return .FAILURE
-	if create_graphics_pipeline(ctx, &pipeline, {"basic.vert.spv", "basic.frag.spv"}, {.FILL, .TRIANGLE_STRIP}) != .SUCCESS do return .FAILURE
+	if create_graphics_pipeline(ctx, &pipeline, {"basic.vert.spv", "basic.frag.spv"}, {.FILL, .TRIANGLE_LIST}) != .SUCCESS do return .FAILURE
 	if create_graphics_pipeline(ctx, &line_pipeline, {"basic.vert.spv", "basic.frag.spv"}, {.FILL, .LINE_STRIP}) != .SUCCESS do return .FAILURE
 	if create_command_buffer(ctx) != .SUCCESS do return .FAILURE
 
@@ -230,8 +236,8 @@ render :: proc(using ctx: ^Context) {
 
 			q : f32 = 1.0 / (math.tan_f32(bdm.to_radians(60) / 2))
 			A : f32 = q / (viewport.width / viewport.height)
-			B : f32 = (0.1 + 1000) / (0.1 - 1000)
-			C : f32 = (2 * (0.1 * 1000)) / (0.1 - 1000)
+			B : f32 = (0.1 + 10000) / (0.1 - 10000)
+			C : f32 = (2 * (0.1 * 10000)) / (0.1 - 10000)
 
 			P : matrix[4,4]f32 = {
 				A, 0, 0, 0,
@@ -240,9 +246,11 @@ render :: proc(using ctx: ^Context) {
 				0, 0, C, 0
 			}
 
-			cam : [3]f32 = {0, 0, 0}
-			target : [3]f32 = {0, 0, -1}
-			forward := bdm.normalize_vec3(cam - target)
+			fmt.println(camera_direction)
+
+			cam : [3]f32 = camera_pos
+			target : [3]f32 = camera_pos + camera_direction
+			forward := -bdm.normalize_vec3(cam - target)
 			side := bdm.normalize_vec3(bdm.cross3(-forward, {0, 1, 0}))
 			up := bdm.normalize_vec3(bdm.cross3(side, -forward))
 
@@ -252,6 +260,8 @@ render :: proc(using ctx: ^Context) {
 				side[2], up[2], -forward[2], 0,
 				-(bdm.dot3(side, cam)), -(bdm.dot3(up, cam)), -(bdm.dot3(-forward, cam)), 1,
 			}
+
+			// V = bdm.make_translation_matrix(camera_pos) * bdm.make_euler_rotation(camera_direction)
 
 			push_constant.mvp = push_constant.mvp * V * P
 

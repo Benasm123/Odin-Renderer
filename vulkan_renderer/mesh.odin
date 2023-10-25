@@ -6,6 +6,7 @@ import vk "vendor:vulkan"
 import bdm "../math_utils"
 
 Vec3 :: [3]f32
+Vec2 :: [2]f32
 
 Vertex :: struct {
 	pos: Vec3,
@@ -177,5 +178,18 @@ create_line_rect :: proc(using ctx: ^Context, colour: Vec3) -> (mesh: ^Mesh) {
 
 	create_indexed_mesh(ctx, mesh)
 
+	return
+}
+
+create_mesh_from_file :: proc(using ctx: ^Context, file_name: string) -> (mesh: ^Mesh) { 
+	ok : ErrorCode
+	mesh, ok = read_obj_mesh(file_name)
+	assert(ok == .SUCCESS)
+
+	mesh.transform.scale = {1, 1, 1}
+
+	mesh.push_constant.mvp = bdm.identity_matrix_4x4
+
+	create_indexed_mesh(ctx, mesh)
 	return
 }

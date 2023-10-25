@@ -48,7 +48,7 @@ create_graphics_pipeline :: proc(using ctx: ^Context, pipeline_ptr: ^vk.Pipeline
     shader_modules := make([]vk.ShaderModule, len(shaders))
 
     for shader, index in shaders {
-        shader_code, result := read_spriv(shaders[index])
+        shader_code, result := read_spirv(shaders[index])
         if (result != .SUCCESS) {
             return .FAILURE
         }
@@ -140,7 +140,7 @@ create_graphics_pipeline :: proc(using ctx: ^Context, pipeline_ptr: ^vk.Pipeline
     rasterization_info.depthClampEnable = false
     rasterization_info.rasterizerDiscardEnable = false
     rasterization_info.polygonMode = settings.fill_mode
-    rasterization_info.cullMode = {.BACK}
+    rasterization_info.cullMode = {}
     rasterization_info.frontFace = .COUNTER_CLOCKWISE
     rasterization_info.depthBiasEnable = false
     rasterization_info.depthBiasConstantFactor = 0.0

@@ -2,3 +2,4 @@
 glslc.exe
 *.exe
 *.pdb
+/Meshes/

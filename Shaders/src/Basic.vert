@@ -25,5 +25,5 @@ void main(void)
 	//colour = vec4(col * angle, 1.0f);
 	//colour = vec4((i_normal + 1.0) / 2.0, 1.0f);
 	//colour = vec4(1.0f, 0.0f, 0.0f, 1.0f);
-	colour = vec4(i_tex, 1.0f);
+	colour = vec4(i_normal, 1.0f);
 }
