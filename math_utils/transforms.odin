@@ -40,7 +40,7 @@ cross3 :: proc(first, second : [3]f32) -> (res : [3]f32) {
 }
 
 dot3 :: proc(first, second : [3]f32) -> (res : f32) {
-    return first[0] * second[0] + first[1] * second[1] + first[2] * second[2]
+    return first.x * second.x + first.y * second.y + first.z * second.z
 }
 
 dimension :: enum {

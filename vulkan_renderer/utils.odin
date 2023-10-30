@@ -5,6 +5,7 @@ import "core:os"
 import "core:path/filepath"
 import "core:strings"
 import "core:strconv"
+import vk "vendor:vulkan"
 
 make_file_path :: proc(folder : string, file : string) -> (path : string) {
     builder := strings.builder_make(0, len(folder) + len(file) + 1)
@@ -32,7 +33,7 @@ read_spirv :: proc(file_name : string) -> (code : []u8, err : ErrorCode = .SUCCE
     return file_contents, err
 }
 
-read_mesh :: proc(file_name : string) -> (mesh : ^Mesh, err: ErrorCode = .SUCCESS) {
+read_mesh :: proc(file_name : string) -> (mesh : IndexedMeshData, err: ErrorCode = .SUCCESS) {
     file_type := (strings.cut(file_name, strings.last_index(file_name, "."), 0))
 
     switch file_type {
@@ -48,7 +49,7 @@ read_mesh :: proc(file_name : string) -> (mesh : ^Mesh, err: ErrorCode = .SUCCES
     return {}, err
 }
 
-read_obj_mesh :: proc(file_name : string) -> (mesh : ^Mesh, err: ErrorCode = .SUCCESS) {
+read_obj_mesh :: proc(file_name : string) -> (mesh : IndexedMeshData, err: ErrorCode = .SUCCESS) {
     fmt.println("Reading OBJ: ", file_name)
 
     file_path := make_file_path("Meshes", file_name)
@@ -93,13 +94,13 @@ read_obj_mesh :: proc(file_name : string) -> (mesh : ^Mesh, err: ErrorCode = .SU
     fmt.println("Vertices:", vertex_count)
     fmt.println("Indices:", index_count)
 
-    mesh = new(Mesh)
     mesh.vertex_data = make([]Vertex, vertex_count)
     mesh.index_data = make([]u32, index_count)
     normals := make([]Vec3, normal_count)
     texture_coords := make([]Vec2, texture_count)
 
     vertex_normal_count := make([]u32, vertex_count)
+    fmt.println("Made arrays")
     defer delete(vertex_normal_count)
 
     vertex_count = 0
@@ -247,10 +248,26 @@ read_obj_mesh :: proc(file_name : string) -> (mesh : ^Mesh, err: ErrorCode = .SU
     return mesh, err
 }
 
-read_fbx_mesh :: proc(file_name : string) -> (mesh : ^Mesh, err: ErrorCode = .SUCCESS) {
+read_fbx_mesh :: proc(file_name : string) -> (mesh : IndexedMeshData, err: ErrorCode = .SUCCESS) {
     fmt.println("Reading FBX: ", file_name)
+    // mesh = new(Mesh)
 
     file_path := make_file_path("Meshes", file_name)
 
     return {}, err
+}
+
+get_memory_from_properties :: proc(using ctx: ^Context, properties: vk.MemoryPropertyFlags) -> (u32) {
+	available_properties: vk.PhysicalDeviceMemoryProperties
+	vk.GetPhysicalDeviceMemoryProperties(physical_device, &available_properties)
+
+	for i in 0..<available_properties.memoryTypeCount {
+		if (available_properties.memoryTypes[i].propertyFlags & properties) == properties {
+			return i
+		}
+	}
+
+	fmt.println("Failed to find supported memory.")
+
+	return 0
 }

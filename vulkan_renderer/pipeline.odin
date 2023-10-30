@@ -83,12 +83,16 @@ create_graphics_pipeline :: proc(using ctx: ^Context, pipeline_ptr: ^vk.Pipeline
 
 
     // VERTEX BINDING
-    vertex_binding: vk.VertexInputBindingDescription
-    vertex_binding.binding = 0
-    vertex_binding.stride = size_of(Vertex)
-    vertex_binding.inputRate = .VERTEX
+    vertex_binding: [2]vk.VertexInputBindingDescription
+    vertex_binding[0].binding = 0
+    vertex_binding[0].stride = size_of(Vertex)
+    vertex_binding[0].inputRate = .VERTEX
 
-    vertex_inputs: [3]vk.VertexInputAttributeDescription
+    vertex_binding[1].binding = 1
+    vertex_binding[1].stride = size_of(Vec3)
+    vertex_binding[1].inputRate = .INSTANCE
+
+    vertex_inputs: [4]vk.VertexInputAttributeDescription
     vertex_inputs[0].location = 0
     vertex_inputs[0].binding = 0
     vertex_inputs[0].format = .R32G32B32_SFLOAT
@@ -104,10 +108,15 @@ create_graphics_pipeline :: proc(using ctx: ^Context, pipeline_ptr: ^vk.Pipeline
     vertex_inputs[2].format = .R32G32B32_SFLOAT
     vertex_inputs[2].offset = cast(u32)offset_of(Vertex, texture)
 
+    vertex_inputs[3].location = 3
+    vertex_inputs[3].binding = 1
+    vertex_inputs[3].format = .R32G32B32_SFLOAT
+    vertex_inputs[3].offset = 0
+
     vertex_input_info: vk.PipelineVertexInputStateCreateInfo
     vertex_input_info.sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
-    vertex_input_info.vertexBindingDescriptionCount = 1
-    vertex_input_info.pVertexBindingDescriptions = &vertex_binding
+    vertex_input_info.vertexBindingDescriptionCount = len(vertex_binding)
+    vertex_input_info.pVertexBindingDescriptions = &vertex_binding[0]
     vertex_input_info.vertexAttributeDescriptionCount = len(vertex_inputs)
     vertex_input_info.pVertexAttributeDescriptions = &vertex_inputs[0]
 
@@ -140,7 +149,7 @@ create_graphics_pipeline :: proc(using ctx: ^Context, pipeline_ptr: ^vk.Pipeline
     rasterization_info.depthClampEnable = false
     rasterization_info.rasterizerDiscardEnable = false
     rasterization_info.polygonMode = settings.fill_mode
-    rasterization_info.cullMode = {}
+    rasterization_info.cullMode = {.BACK}
     rasterization_info.frontFace = .COUNTER_CLOCKWISE
     rasterization_info.depthBiasEnable = false
     rasterization_info.depthBiasConstantFactor = 0.0

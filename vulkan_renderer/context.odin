@@ -5,6 +5,7 @@ package vulkan_renderer
 import "core:fmt"
 import "core:mem"
 import "core:math"
+import "core:time"
 import vk "vendor:vulkan"
 import bdm "../math_utils"
 import sdl "vendor:sdl2"
@@ -41,37 +42,6 @@ QueueFamilyType :: enum {
 	COMPUTE 
 }
 
-INDENT :: "  "
-
-Buffer :: struct {
-	buffer: vk.Buffer,
-	memory: vk.DeviceMemory,
-	length: int,
-	size: vk.DeviceSize,
-	data_ptr: rawptr
-}
-
-Image :: struct {
-	image: vk.Image,
-	memory: vk.DeviceMemory,
-	image_view: vk.ImageView
-}
-
-SwapchainResources :: struct {
-	images: []vk.Image,
-	image_views: []vk.ImageView,
-	framebuffers: []vk.Framebuffer,
-	depth_images: []Image,
-	multi_images: []Image,
-	extent: vk.Extent2D, // MARKER ---- Use this when we hit a possible resize, and verify we actually need to recreate the swapchain!
-}
-
-SwapchainSettings :: struct {
-	format: vk.SurfaceFormatKHR,
-	present_mode: vk.PresentModeKHR,
-	image_count: u32,
-}
-
 Context :: struct {
 	instance: vk.Instance,
   	device: vk.Device,
@@ -91,6 +61,8 @@ Context :: struct {
 	command_pool: vk.CommandPool,
 	command_buffers: [MAX_FRAMES_IN_FLIGHT]vk.CommandBuffer,
 	
+	clear_values : [3]vk.ClearValue,
+	
 	image_available: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore,
 	render_finished: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore,
 	in_flight: [MAX_FRAMES_IN_FLIGHT]vk.Fence,
@@ -102,28 +74,12 @@ Context :: struct {
 	sample_count: vk.SampleCountFlag,
 	framebuffer_resized: bool,
 
-	push_constant: PushConstant,
+	meshes: [dynamic]^StaticMesh,
+	line_meshes: [dynamic]^StaticMesh,
 
-	meshes: [dynamic]^Mesh,
-	line_meshes: [dynamic]^Mesh,
-
-	camera_pos: Vec3,
-	camera_direction: Vec3,
-}
-
-get_memory_from_properties :: proc(using ctx: ^Context, properties: vk.MemoryPropertyFlags) -> (u32) {
-	available_properties: vk.PhysicalDeviceMemoryProperties
-	vk.GetPhysicalDeviceMemoryProperties(physical_device, &available_properties)
-
-	for i in 0..<available_properties.memoryTypeCount {
-		if (available_properties.memoryTypes[i].propertyFlags & properties) == properties {
-			return i
-		}
-	}
-
-	fmt.println("Failed to find supported memory.")
-
-	return 0
+	camera: Camera,
+	instance_buffer : Buffer,
+	fps_count : u32,
 }
 
 create_command_buffer :: proc(using ctx: ^Context) -> (err: ErrorCode = .SUCCESS) {
@@ -161,6 +117,9 @@ create_semaphores_and_fences :: proc(using ctx: ^Context) {
 }
 
 init_renderer :: proc(using ctx: ^Context) -> (ErrorCode) {
+	sdl.Init(sdl.INIT_VIDEO)
+	window = sdl.CreateWindow("Project B", sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED, 1200, 800, sdl.WINDOW_VULKAN + sdl.WINDOW_RESIZABLE)
+
 	sample_count = ._8 // WEAK_TODO This should be checked and set
 
  	if create_instance(ctx) != .SUCCESS do return .FAILURE
@@ -178,15 +137,22 @@ init_renderer :: proc(using ctx: ^Context) -> (ErrorCode) {
 	viewport.minDepth = 0.0
 	viewport.maxDepth = 1.0
 
-	camera_direction = {0, 0, -1}
-	camera_pos = {0, 0, -10}
-
 	if create_pipeline_layout(ctx) != .SUCCESS do return .FAILURE
 	if create_graphics_pipeline(ctx, &pipeline, {"basic.vert.spv", "basic.frag.spv"}, {.FILL, .TRIANGLE_LIST}) != .SUCCESS do return .FAILURE
 	if create_graphics_pipeline(ctx, &line_pipeline, {"basic.vert.spv", "basic.frag.spv"}, {.FILL, .LINE_STRIP}) != .SUCCESS do return .FAILURE
 	if create_command_buffer(ctx) != .SUCCESS do return .FAILURE
 
 	create_semaphores_and_fences(ctx)
+
+	// Set Clear Values
+	clear_values[0].color.float32 = [4]f32{0.1, 0.1, 0.1, 1}
+	clear_values[1].depthStencil = {1.0, 0}
+	clear_values[2].color.float32 = [4]f32{0.1, 0.1, 0.1, 1}
+
+	camera = make_camera(60, viewport.width / viewport.height)
+
+	instance_data : [1]Vec3 = {{0, 0, 0}}
+	instance_buffer = create_buffer(ctx, instance_data[:], {.VERTEX_BUFFER})
 
 	return .SUCCESS
 }
@@ -200,16 +166,15 @@ render :: proc(using ctx: ^Context) {
 	image_index: u32
 	vk.AcquireNextImageKHR(device, swapchain, 0, image_available[curr_frame], 0, &image_index)
 
+	fps_count += 1
+
 	begin_info: vk.CommandBufferBeginInfo
 	begin_info.sType = .COMMAND_BUFFER_BEGIN_INFO
 
 	vk.ResetCommandBuffer(cmd_buffer, {})
 	vk.BeginCommandBuffer(cmd_buffer, &begin_info)
 	{
-		clear_values : [3]vk.ClearValue
-		clear_values[0].color.float32 = [4]f32{0.2, 0.2, 0.2, 0.2}
-		clear_values[1].depthStencil = {1.0, 0}
-		clear_values[2].color.float32 = [4]f32{0.2, 0.2, 0.2, 0.2}
+		// These can be constants
 
 		render_pass_begin_info: vk.RenderPassBeginInfo
 		render_pass_begin_info.sType = .RENDER_PASS_BEGIN_INFO
@@ -227,103 +192,13 @@ render :: proc(using ctx: ^Context) {
 		vk.CmdBindPipeline(cmd_buffer, .GRAPHICS, pipeline)
 
         for mesh in meshes {
-			push_constant := mesh.push_constant
-
-			scale_matrix := bdm.make_scale_matrix(mesh.transform.scale)
-			rotation_matrix := bdm.make_euler_rotation(mesh.transform.rotation)
-			translate_matrix := bdm.make_translation_matrix(mesh.transform.position)
-			push_constant.mvp = push_constant.mvp * scale_matrix * rotation_matrix * translate_matrix
-
-			q : f32 = 1.0 / (math.tan_f32(bdm.to_radians(60) / 2))
-			A : f32 = q / (viewport.width / viewport.height)
-			B : f32 = (0.1 + 10000) / (0.1 - 10000)
-			C : f32 = (2 * (0.1 * 10000)) / (0.1 - 10000)
-
-			P : matrix[4,4]f32 = {
-				A, 0, 0, 0,
-				0, q, 0, 0,
-				0, 0, B, -1,
-				0, 0, C, 0
-			}
-
-			fmt.println(camera_direction)
-
-			cam : [3]f32 = camera_pos
-			target : [3]f32 = camera_pos + camera_direction
-			forward := -bdm.normalize_vec3(cam - target)
-			side := bdm.normalize_vec3(bdm.cross3(-forward, {0, 1, 0}))
-			up := bdm.normalize_vec3(bdm.cross3(side, -forward))
-
-			V : matrix[4, 4]f32 = {
-				side[0], up[0], -forward[0], 0,
-				side[1], up[1], -forward[1], 0,
-				side[2], up[2], -forward[2], 0,
-				-(bdm.dot3(side, cam)), -(bdm.dot3(up, cam)), -(bdm.dot3(-forward, cam)), 1,
-			}
-
-			// V = bdm.make_translation_matrix(camera_pos) * bdm.make_euler_rotation(camera_direction)
-
-			push_constant.mvp = push_constant.mvp * V * P
-
-			vk.CmdPushConstants(cmd_buffer, pipeline_layout, {.VERTEX}, 0, size_of(push_constant), &push_constant)
-
-			offset: []vk.DeviceSize = {0}
-
-			vb : []vk.Buffer = {mesh.vertex_buffer.buffer}
-			ib : []vk.Buffer = {mesh.index_buffer.buffer}
-
-			vk.CmdBindVertexBuffers(cmd_buffer, 0, 1, &vb[0], &offset[0])
-			vk.CmdBindIndexBuffer(cmd_buffer, ib[0], 0, .UINT32)
-			vk.CmdDrawIndexed(cmd_buffer, cast(u32)len(mesh.index_data), 1, 0, 0, 0)
+			render_mesh(ctx, mesh)
 		}
 
 		vk.CmdBindPipeline(cmd_buffer, .GRAPHICS, line_pipeline)
 
 		for mesh in line_meshes {
-			push_constant := mesh.push_constant
-
-			scale_matrix := bdm.make_scale_matrix(mesh.transform.scale)
-			rotation_matrix := bdm.make_euler_rotation(mesh.transform.rotation)
-			translate_matrix := bdm.make_translation_matrix(mesh.transform.position)
-			push_constant.mvp = push_constant.mvp * scale_matrix * rotation_matrix * translate_matrix
-
-			q : f32 = 1.0 / (math.tan_f32(bdm.to_radians(60) / 2))
-			A : f32 = q / (viewport.width / viewport.height)
-			B : f32 = (0.1 + 1000) / (0.1 - 1000)
-			C : f32 = (2 * (0.1 * 1000)) / (0.1 - 1000)
-
-			P : matrix[4,4]f32 = {
-				A, 0, 0, 0,
-				0, q, 0, 0,
-				0, 0, B, -1,
-				0, 0, C, 0
-			}
-
-			cam : [3]f32 = {0, 0, 0}
-			target : [3]f32 = {0, 0, -1}
-			forward := bdm.normalize_vec3(cam - target)
-			side := bdm.normalize_vec3(bdm.cross3(-forward, {0, 1, 0}))
-			up := bdm.normalize_vec3(bdm.cross3(side, -forward))
-
-			V : matrix[4, 4]f32 = {
-				side[0], up[0], -forward[0], 0,
-				side[1], up[1], -forward[1], 0,
-				side[2], up[2], -forward[2], 0,
-				-(bdm.dot3(side, cam)), -(bdm.dot3(up, cam)), -(bdm.dot3(-forward, cam)), 1,
-			}
-
-			push_constant.mvp = push_constant.mvp * V * P
-
-			vk.CmdPushConstants(cmd_buffer, pipeline_layout, {.VERTEX}, 0, size_of(push_constant), &push_constant)
-
-			offset: []vk.DeviceSize = {0}
-
-			vb : []vk.Buffer = {mesh.vertex_buffer.buffer}
-			ib : []vk.Buffer = {mesh.index_buffer.buffer}
-
-			vk.CmdBindVertexBuffers(cmd_buffer, 0, 1, &vb[0], &offset[0])
-			vk.CmdBindIndexBuffer(cmd_buffer, ib[0], 0, .UINT32)
-			vk.CmdDrawIndexed(cmd_buffer, cast(u32)len(mesh.index_data), 1, 0, 0, 0)
+			render_mesh(ctx, mesh)
 		}
 
 		vk.CmdEndRenderPass(cmd_buffer)
@@ -355,22 +230,47 @@ render :: proc(using ctx: ^Context) {
 	if vk.QueuePresentKHR(queues[.GRAPHICS], &present_info) != .SUCCESS {
 		resize_destroy(ctx)
 		
-		fmt.println("SWAPCHAIN")
 		create_swapchain(ctx)
-		fmt.println("FRAMEBUFFER")
 		create_framebuffers(ctx)
-		fmt.println("SEMS")
 		create_semaphores_and_fences(ctx)
+
 		scissor.extent = swapchain_resources.extent
 		viewport.width = cast(f32)swapchain_resources.extent.width
 		viewport.height = cast(f32)swapchain_resources.extent.height
 		viewport.minDepth = 0.0
 		viewport.maxDepth = 1.0
+
+		camera.aspect_ratio = viewport.width / viewport.height	
+		update_projection_matrix(&camera)
 		return
 	}
 
 	curr_frame += 1
 	curr_frame %= MAX_FRAMES_IN_FLIGHT
+}
+
+render_mesh :: proc(using ctx: ^Context, static_mesh: ^StaticMesh) {
+	cmd_buffer := command_buffers[curr_frame]
+	mvp := bdm.identity_matrix_4x4
+
+	scale_matrix := bdm.make_scale_matrix(static_mesh.transform.scale)
+	rotation_matrix := bdm.make_euler_rotation(static_mesh.transform.rotation)
+	translate_matrix := bdm.make_translation_matrix(static_mesh.transform.position)
+	mvp = mvp * scale_matrix * rotation_matrix * translate_matrix
+
+	mvp = mvp * camera.viewMatrix * camera.projectionMatrix
+
+	vk.CmdPushConstants(cmd_buffer, pipeline_layout, {.VERTEX}, 0, size_of(mvp), &mvp)
+
+	offset: []vk.DeviceSize = {0, 0}
+
+	mesh := MeshTable[static_mesh.meshID]
+
+	vb : []vk.Buffer = {mesh.vertex_buffer.buffer, instance_buffer.buffer}
+
+	vk.CmdBindVertexBuffers(cmd_buffer, 0, cast(u32)len(vb), &vb[0], &offset[0])
+	vk.CmdBindIndexBuffer(cmd_buffer, mesh.index_buffer.buffer, 0, .UINT32)
+	vk.CmdDrawIndexed(cmd_buffer, mesh.triangles * 3, 1, 0, 0, 0)
 }
 
 resize_destroy :: proc(using ctx: ^Context) {
@@ -388,7 +288,7 @@ resize_destroy :: proc(using ctx: ^Context) {
 		vk.DestroyImage(device, depth_image.image, nil)
 	}
 	delete(swapchain_resources.depth_images)
-	fmt.println(INDENT + "Depth Resources Destroyed")
+	fmt.println("    " + "Depth Resources Destroyed")
 	
 
 	for multi_image in swapchain_resources.multi_images {
@@ -397,59 +297,56 @@ resize_destroy :: proc(using ctx: ^Context) {
 		vk.DestroyImage(device, multi_image.image, nil)
 	}
 	delete(swapchain_resources.multi_images)
-	fmt.println(INDENT + "MultiSample Resources Destroyed")
+	fmt.println("    " + "MultiSample Resources Destroyed")
 
 	for framebuffer in swapchain_resources.framebuffers {
 		vk.DestroyFramebuffer(device, framebuffer, nil)
 	}
 	delete(swapchain_resources.framebuffers)
-	fmt.println(INDENT + "Framebuffers Destroyed")
+	fmt.println("    " + "Framebuffers Destroyed")
 }
 
 destroy_renderer :: proc(using ctx: ^Context) {
 	vk.DeviceWaitIdle(device)
 	fmt.println("Renderer Destroy Begin")
 
-	for mesh in meshes {
-		destroy_indexed_mesh(ctx, mesh)
-		free(mesh)
-	}
-	for mesh in line_meshes {
-		destroy_indexed_mesh(ctx, mesh)
-		free(mesh)
-	}
-	fmt.println(INDENT + "Meshes Destroyed")
+	vk.FreeMemory(device, instance_buffer.memory, nil)
+	vk.DestroyBuffer(device, instance_buffer.buffer, nil)
+	instance_buffer.data_ptr = nil
+
+	DestroyMeshes(ctx)
+	fmt.println("    " + "Meshes Destroyed")
 
 	for i in 0..<MAX_FRAMES_IN_FLIGHT {
 		vk.DestroySemaphore(device, image_available[i], nil)
 		vk.DestroySemaphore(device, render_finished[i], nil)
 		vk.DestroyFence(device, in_flight[i], nil)
 	}
-	fmt.println(INDENT + "Synchronization Destroyed")
+	fmt.println("    " + "Synchronization Destroyed")
 
 	vk.DestroyCommandPool(device, command_pool, nil)
-	fmt.println(INDENT + "Command Pool Destroyed")
+	fmt.println("    " + "Command Pool Destroyed")
 
 	vk.DestroyPipeline(device, pipeline, nil)
-	fmt.println(INDENT + "Graphics Pipeline Destroyed")
+	fmt.println("    " + "Graphics Pipeline Destroyed")
 
 	vk.DestroyPipeline(device, line_pipeline, nil)
-	fmt.println(INDENT + "Line Pipeline Destroyed")
+	fmt.println("    " + "Line Pipeline Destroyed")
 
 	vk.DestroyDescriptorPool(device, descriptor_pool, nil)
-	fmt.println(INDENT + "Descriptor Pool Destroyed")
+	fmt.println("    " + "Descriptor Pool Destroyed")
 
 	vk.DestroyPipelineLayout(device, pipeline_layout, nil)
-	fmt.println(INDENT + "Pipeline Layout Destroyed")
+	fmt.println("    " + "Pipeline Layout Destroyed")
 
 	vk.DestroyRenderPass(device, render_pass, nil)
-	fmt.println(INDENT + "Render Pass Destroyed")
+	fmt.println("    " + "Render Pass Destroyed")
 
 	for image_view in swapchain_resources.image_views {
 		vk.DestroyImageView(device, image_view, nil)
 	}
 	delete(swapchain_resources.image_views)
-	fmt.println(INDENT + "Swapchain ImageViews Destroyed")
+	fmt.println("    " + "Swapchain ImageViews Destroyed")
 
 	for depth_image in swapchain_resources.depth_images {
 		vk.FreeMemory(device, depth_image.memory, nil)
@@ -457,7 +354,7 @@ destroy_renderer :: proc(using ctx: ^Context) {
 		vk.DestroyImage(device, depth_image.image, nil)
 	}
 	delete(swapchain_resources.depth_images)
-	fmt.println(INDENT + "Depth Resources Destroyed")
+	fmt.println("    " + "Depth Resources Destroyed")
 	
 
 	for multi_image in swapchain_resources.multi_images {
@@ -466,26 +363,26 @@ destroy_renderer :: proc(using ctx: ^Context) {
 		vk.DestroyImage(device, multi_image.image, nil)
 	}
 	delete(swapchain_resources.multi_images)
-	fmt.println(INDENT + "MultiSample Resources Destroyed")
+	fmt.println("    " + "MultiSample Resources Destroyed")
 
 	for framebuffer in swapchain_resources.framebuffers {
 		vk.DestroyFramebuffer(device, framebuffer, nil)
 	}
 	delete(swapchain_resources.framebuffers)
-	fmt.println(INDENT + "Framebuffers Destroyed")
+	fmt.println("    " + "Framebuffers Destroyed")
 
 	vk.DestroySwapchainKHR(device, swapchain, nil)
 	delete(swapchain_resources.images)
-	fmt.println(INDENT + "Swapchain Destroyed")
+	fmt.println("    " + "Swapchain Destroyed")
 
 	vk.DestroyDevice(device, nil)
-	fmt.println(INDENT + "Device Destroyed")
+	fmt.println("    " + "Device Destroyed")
 
 	vk.DestroySurfaceKHR(instance, surface, nil)
-	fmt.println(INDENT + "Surface Destroyed")
+	fmt.println("    " + "Surface Destroyed")
 
 	vk.DestroyInstance(instance, nil)
-	fmt.println(INDENT + "Instance Destroyed")
+	fmt.println("    " + "Instance Destroyed")
 
 	fmt.println("Renderer Destroyed")
 }
