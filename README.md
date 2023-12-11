@@ -1,5 +1,5 @@
 # Odin-Renderer
-### 600 Meshes (Not instanced)
+### 600 Meshes
 ![image](https://github.com/Benasm123/Odin-Renderer/assets/74568812/317ce266-10d5-4b61-9598-a2ef288a5de1)
 
 ### Stanford Dragon
