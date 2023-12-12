@@ -1,8 +1,9 @@
 # Odin-Renderer
 
 ## Build
-- Install SDL2 and include the SDL2.dll file in the root of the project.
-- Run ```
+Install SDL2 and include the SDL2.dll file in the root of the project.
+Run 
+```
 odin run .
 ```
 Done.
